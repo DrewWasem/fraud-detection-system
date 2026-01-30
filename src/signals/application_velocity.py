@@ -1,8 +1,9 @@
 """Application velocity signal detection."""
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, List, Set
 
 
 @dataclass
@@ -26,6 +27,10 @@ class ApplicationVelocitySignal:
     MAX_APPS_7D = 3
     MAX_APPS_30D = 6
     MAX_APPS_90D = 12
+
+    # Redis key prefix
+    KEY_PREFIX = "app_velocity"
+    TTL_DAYS = 90
 
     def __init__(self, redis_client=None):
         self._redis = redis_client
@@ -90,13 +95,48 @@ class ApplicationVelocitySignal:
 
     def _get_app_count(self, ssn_hash: str, days: int) -> int:
         """Get application count for time period."""
-        # TODO: Implement Redis lookup
-        return 0
+        if not self._redis:
+            return 0
+
+        try:
+            key = f"{self.KEY_PREFIX}:{ssn_hash}:apps"
+            cutoff = datetime.now() - timedelta(days=days)
+            cutoff_ts = cutoff.timestamp()
+
+            # Use sorted set with timestamps as scores
+            count = self._redis.zcount(key, cutoff_ts, "+inf")
+            return count or 0
+        except Exception:
+            return 0
 
     def _get_unique_institutions(self, ssn_hash: str, days: int) -> int:
         """Get unique institution count."""
-        # TODO: Implement Redis lookup
-        return 0
+        if not self._redis:
+            return 0
+
+        try:
+            key = f"{self.KEY_PREFIX}:{ssn_hash}:apps"
+            cutoff = datetime.now() - timedelta(days=days)
+            cutoff_ts = cutoff.timestamp()
+
+            # Get all applications in range
+            apps = self._redis.zrangebyscore(key, cutoff_ts, "+inf")
+            if not apps:
+                return 0
+
+            # Extract unique institutions
+            institutions: Set[str] = set()
+            for app_data in apps:
+                try:
+                    data = json.loads(app_data)
+                    if 'institution_id' in data:
+                        institutions.add(data['institution_id'])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            return len(institutions)
+        except Exception:
+            return 0
 
     def record_application(
         self,
@@ -107,4 +147,56 @@ class ApplicationVelocitySignal:
         """Record a new application."""
         if timestamp is None:
             timestamp = datetime.now()
-        # TODO: Implement Redis storage
+
+        if not self._redis:
+            return
+
+        try:
+            key = f"{self.KEY_PREFIX}:{ssn_hash}:apps"
+            app_data = json.dumps({
+                'institution_id': institution_id,
+                'timestamp': timestamp.isoformat(),
+            })
+
+            # Add to sorted set with timestamp as score
+            self._redis.zadd(key, {app_data: timestamp.timestamp()})
+
+            # Set TTL
+            self._redis.expire(key, self.TTL_DAYS * 24 * 60 * 60)
+
+            # Clean old entries
+            cutoff = datetime.now() - timedelta(days=self.TTL_DAYS)
+            self._redis.zremrangebyscore(key, "-inf", cutoff.timestamp())
+        except Exception:
+            pass
+
+    def get_application_history(
+        self,
+        ssn_hash: str,
+        days: int = 90,
+    ) -> List[dict]:
+        """Get application history for an identity."""
+        if not self._redis:
+            return []
+
+        try:
+            key = f"{self.KEY_PREFIX}:{ssn_hash}:apps"
+            cutoff = datetime.now() - timedelta(days=days)
+            cutoff_ts = cutoff.timestamp()
+
+            apps = self._redis.zrangebyscore(key, cutoff_ts, "+inf", withscores=True)
+            if not apps:
+                return []
+
+            history = []
+            for app_data, score in apps:
+                try:
+                    data = json.loads(app_data)
+                    data['score_timestamp'] = score
+                    history.append(data)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            return sorted(history, key=lambda x: x.get('score_timestamp', 0), reverse=True)
+        except Exception:
+            return []

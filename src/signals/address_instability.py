@@ -1,8 +1,8 @@
 """Address instability signal detection."""
 
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Optional
+from datetime import datetime, timedelta
+from typing import Optional, List
 
 
 @dataclass
@@ -26,8 +26,9 @@ class AddressInstabilitySignal:
     MAX_CHANGES_24M = 4
     MIN_AVG_TENURE = 6  # months
 
-    def __init__(self, bureau_connector=None):
+    def __init__(self, bureau_connector=None, address_velocity_tracker=None):
         self._bureau = bureau_connector
+        self._velocity_tracker = address_velocity_tracker
 
     def detect(
         self,
@@ -82,10 +83,53 @@ class AddressInstabilitySignal:
 
     def _get_address_changes(self, ssn_hash: str, months: int) -> int:
         """Get address change count for period."""
-        # TODO: Implement bureau query
+        if self._bureau:
+            try:
+                credit_file = self._bureau.get_credit_file(ssn_hash)
+                if credit_file and hasattr(credit_file, 'address_history'):
+                    cutoff = datetime.now() - timedelta(days=months * 30)
+                    changes = sum(
+                        1 for addr in credit_file.address_history
+                        if hasattr(addr, 'reported_date') and addr.reported_date >= cutoff
+                    )
+                    return max(0, changes - 1)  # Subtract 1 for current address
+            except Exception:
+                pass
+
+        # Try velocity tracker as fallback
+        if self._velocity_tracker:
+            try:
+                history = self._velocity_tracker.get_identity_addresses(ssn_hash)
+                if history:
+                    cutoff = datetime.now() - timedelta(days=months * 30)
+                    recent = [h for h in history if h.get('first_seen', datetime.min) >= cutoff]
+                    return len(recent)
+            except Exception:
+                pass
+
         return 0
 
     def _get_avg_address_tenure(self, ssn_hash: str) -> Optional[float]:
         """Get average address tenure in months."""
-        # TODO: Implement bureau query
+        if self._bureau:
+            try:
+                credit_file = self._bureau.get_credit_file(ssn_hash)
+                if credit_file and hasattr(credit_file, 'address_history'):
+                    addresses = credit_file.address_history
+                    if len(addresses) >= 2:
+                        tenures = []
+                        sorted_addrs = sorted(
+                            addresses,
+                            key=lambda x: getattr(x, 'reported_date', datetime.min)
+                        )
+                        for i in range(len(sorted_addrs) - 1):
+                            start = getattr(sorted_addrs[i], 'reported_date', None)
+                            end = getattr(sorted_addrs[i + 1], 'reported_date', None)
+                            if start and end:
+                                tenure = (end - start).days / 30
+                                tenures.append(tenure)
+                        if tenures:
+                            return sum(tenures) / len(tenures)
+            except Exception:
+                pass
         return None

@@ -256,7 +256,7 @@ async def get_graph_features(identity_id: str):
 @router.post("/detect-clusters")
 async def run_cluster_detection(
     min_size: int = Query(default=3, ge=2),
-    algorithm: str = Query(default="louvain", regex="^(louvain|label_propagation)$"),
+    algorithm: str = Query(default="louvain", pattern="^(louvain|label_propagation)$"),
 ):
     """
     Run cluster detection on the identity graph.

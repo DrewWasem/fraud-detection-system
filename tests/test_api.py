@@ -26,7 +26,8 @@ class TestHealthEndpoints:
         response = client.get("/health")
         assert response.status_code == 200
         data = response.json()
-        assert data["status"] == "healthy"
+        # Status can be "healthy" or "degraded" depending on service availability
+        assert data["status"] in ["healthy", "degraded"]
         assert "components" in data
 
 

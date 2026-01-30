@@ -5,7 +5,7 @@ from pathlib import Path
 from functools import lru_cache
 
 from pydantic import Field
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class ScoringSettings(BaseSettings):
@@ -33,12 +33,11 @@ class BustOutSettings(BaseSettings):
 class Neo4jSettings(BaseSettings):
     """Neo4j connection configuration."""
 
+    model_config = SettingsConfigDict(env_prefix="NEO4J_")
+
     uri: str = Field(default="bolt://localhost:7687")
     user: str = Field(default="neo4j")
     password: str = Field(default="")
-
-    class Config:
-        env_prefix = "NEO4J_"
 
 
 class EntityResolutionSettings(BaseSettings):
@@ -71,6 +70,8 @@ class VelocitySettings(BaseSettings):
 class RedisSettings(BaseSettings):
     """Redis configuration."""
 
+    model_config = SettingsConfigDict(env_prefix="REDIS_")
+
     host: str = "localhost"
     port: int = 6379
     db: int = 0
@@ -85,20 +86,16 @@ class RedisSettings(BaseSettings):
     # TTL for velocity data (in seconds)
     velocity_ttl: int = 180 * 24 * 60 * 60  # 180 days
 
-    class Config:
-        env_prefix = "REDIS_"
-
 
 class KafkaSettings(BaseSettings):
     """Kafka configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="KAFKA_")
 
     bootstrap_servers: str = "localhost:9092"
     applications_topic: str = "credit-applications"
     scores_topic: str = "synthetic-scores"
     alerts_topic: str = "bust-out-alerts"
-
-    class Config:
-        env_prefix = "KAFKA_"
 
 
 class Settings(BaseSettings):
@@ -125,19 +122,10 @@ class Settings(BaseSettings):
 
     # Paths
     base_dir: Path = Path(__file__).parent.parent.parent
-    models_dir: Path = Field(default=None)
-    data_dir: Path = Field(default=None)
+    models_dir: Path = Field(default_factory=lambda: Path(__file__).parent.parent.parent / "models")
+    data_dir: Path = Field(default_factory=lambda: Path(__file__).parent.parent.parent / "data")
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        if self.models_dir is None:
-            self.models_dir = self.base_dir / "models"
-        if self.data_dir is None:
-            self.data_dir = self.base_dir / "data"
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 
 @lru_cache
