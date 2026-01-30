@@ -23,10 +23,14 @@ class GraphFeatures:
     shared_ssn_count: int
     shared_address_count: int
     shared_phone_count: int
+    shared_email_count: int
     shared_device_count: int
+    cluster_id: Optional[str]
     cluster_size: int
     cluster_density: float
     neighbor_avg_synthetic_score: float
+    neighbor_max_synthetic_score: float
+    high_risk_neighbor_count: int
     feature_vector: np.ndarray
 
 
@@ -147,6 +151,13 @@ class GraphFeatureExtractor:
         avg_neighbor_score = (
             np.mean(neighbor_scores) if neighbor_scores else 0.0
         )
+        max_neighbor_score = (
+            np.max(neighbor_scores) if neighbor_scores else 0.0
+        )
+        high_risk_count = sum(1 for s in neighbor_scores if s > 0.5)
+
+        # Get cluster ID from node if available
+        cluster_id = G.nodes[identity_id].get("cluster_id")
 
         # Build feature vector
         feature_vector = np.array(
@@ -159,10 +170,13 @@ class GraphFeatureExtractor:
                 shared_counts["ssn"],
                 shared_counts["address"],
                 shared_counts["phone"],
+                shared_counts["email"],
                 shared_counts["device"],
                 cluster_size,
                 cluster_density,
                 avg_neighbor_score,
+                max_neighbor_score,
+                high_risk_count,
             ]
         )
 
@@ -176,10 +190,14 @@ class GraphFeatureExtractor:
             shared_ssn_count=shared_counts["ssn"],
             shared_address_count=shared_counts["address"],
             shared_phone_count=shared_counts["phone"],
+            shared_email_count=shared_counts["email"],
             shared_device_count=shared_counts["device"],
+            cluster_id=cluster_id,
             cluster_size=cluster_size,
             cluster_density=cluster_density,
             neighbor_avg_synthetic_score=avg_neighbor_score,
+            neighbor_max_synthetic_score=max_neighbor_score,
+            high_risk_neighbor_count=high_risk_count,
             feature_vector=feature_vector,
         )
 
@@ -229,11 +247,15 @@ class GraphFeatureExtractor:
             shared_ssn_count=0,
             shared_address_count=0,
             shared_phone_count=0,
+            shared_email_count=0,
             shared_device_count=0,
+            cluster_id=None,
             cluster_size=1,
             cluster_density=0.0,
             neighbor_avg_synthetic_score=0.0,
-            feature_vector=np.zeros(12),
+            neighbor_max_synthetic_score=0.0,
+            high_risk_neighbor_count=0,
+            feature_vector=np.zeros(15),
         )
 
     def extract_batch(self, identity_ids: list[str]) -> list[GraphFeatures]:

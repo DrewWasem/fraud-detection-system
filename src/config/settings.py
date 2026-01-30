@@ -68,6 +68,27 @@ class VelocitySettings(BaseSettings):
     email_max_identities_6mo: int = 2
 
 
+class RedisSettings(BaseSettings):
+    """Redis configuration."""
+
+    host: str = "localhost"
+    port: int = 6379
+    db: int = 0
+    password: str = ""
+
+    # Velocity key prefixes
+    address_prefix: str = "velocity:address"
+    phone_prefix: str = "velocity:phone"
+    email_prefix: str = "velocity:email"
+    device_prefix: str = "velocity:device"
+
+    # TTL for velocity data (in seconds)
+    velocity_ttl: int = 180 * 24 * 60 * 60  # 180 days
+
+    class Config:
+        env_prefix = "REDIS_"
+
+
 class KafkaSettings(BaseSettings):
     """Kafka configuration."""
 
@@ -99,6 +120,7 @@ class Settings(BaseSettings):
         default_factory=ClusterDetectionSettings
     )
     velocity: VelocitySettings = Field(default_factory=VelocitySettings)
+    redis: RedisSettings = Field(default_factory=RedisSettings)
     kafka: KafkaSettings = Field(default_factory=KafkaSettings)
 
     # Paths
