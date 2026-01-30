@@ -444,11 +444,11 @@ signals:
 - [x] Basic graph queries
 - [x] Cluster detection
 
-### Phase 2: Synthetic Signals 🔄 IN PROGRESS
+### Phase 2: Synthetic Signals ✅ COMPLETE
 - [x] SSN validation and issuance checking
 - [x] PII velocity tracking
-- [ ] Credit file age analysis (thin file detector)
-- [ ] Device fingerprinting
+- [x] Credit file age analysis (thin file detector)
+- [x] Device fingerprinting
 
 ### Phase 3: ML Models ✅ COMPLETE
 - [x] Synthetic identity scorer

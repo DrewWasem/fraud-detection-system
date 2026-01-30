@@ -1,11 +1,12 @@
 """Device fingerprinting for fraud detection."""
 
 import hashlib
+import json
 import logging
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, asdict
+from datetime import datetime, timedelta
 from enum import Enum
-from typing import Optional
+from typing import Optional, List
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,11 @@ class DeviceRisk:
 class DeviceFingerprinter:
     """Creates and analyzes device fingerprints."""
 
+    # Redis key prefixes
+    KEY_PREFIX = "device"
+    FRAUD_DEVICES_KEY = "device:fraud_list"
+    TTL_DAYS = 180
+
     def __init__(self, redis_client=None):
         """
         Initialize fingerprinter.
@@ -70,6 +76,7 @@ class DeviceFingerprinter:
         """
         self._redis = redis_client
         self._fraud_devices: set[str] = set()
+        self._load_fraud_devices()
 
     def create_fingerprint(
         self,
@@ -155,8 +162,14 @@ class DeviceFingerprinter:
         else:
             device_type = DeviceType.DESKTOP
 
-        # Detect OS
-        if "windows" in ua_lower:
+        # Detect OS (order matters - check mobile OSes before desktop)
+        if "android" in ua_lower:
+            os = "Android"
+            os_version = "Unknown"
+        elif "iphone" in ua_lower or "ipad" in ua_lower or "ios" in ua_lower:
+            os = "iOS"
+            os_version = "Unknown"
+        elif "windows" in ua_lower:
             os = "Windows"
             os_version = "Unknown"
         elif "mac os" in ua_lower or "macos" in ua_lower:
@@ -164,12 +177,6 @@ class DeviceFingerprinter:
             os_version = "Unknown"
         elif "linux" in ua_lower:
             os = "Linux"
-            os_version = "Unknown"
-        elif "android" in ua_lower:
-            os = "Android"
-            os_version = "Unknown"
-        elif "ios" in ua_lower or "iphone" in ua_lower or "ipad" in ua_lower:
-            os = "iOS"
             os_version = "Unknown"
         else:
             os = "Unknown"
@@ -283,10 +290,178 @@ class DeviceFingerprinter:
 
     def _get_identity_count(self, fingerprint_id: str) -> int:
         """Get count of identities associated with device."""
-        # TODO: Implement Redis lookup
-        return 0
+        if not self._redis:
+            return 0
+
+        try:
+            key = f"{self.KEY_PREFIX}:{fingerprint_id}:identities"
+            count = self._redis.scard(key)
+            return count or 0
+        except Exception as e:
+            logger.warning(f"Failed to get identity count: {e}")
+            return 0
 
     def mark_fraud_device(self, fingerprint_id: str) -> None:
         """Mark a device as known fraud."""
         self._fraud_devices.add(fingerprint_id)
-        # TODO: Persist to Redis/database
+
+        if self._redis:
+            try:
+                self._redis.sadd(self.FRAUD_DEVICES_KEY, fingerprint_id)
+            except Exception as e:
+                logger.warning(f"Failed to persist fraud device: {e}")
+
+    def _load_fraud_devices(self) -> None:
+        """Load fraud devices from Redis."""
+        if not self._redis:
+            return
+
+        try:
+            devices = self._redis.smembers(self.FRAUD_DEVICES_KEY)
+            if devices:
+                self._fraud_devices = set(devices)
+        except Exception as e:
+            logger.warning(f"Failed to load fraud devices: {e}")
+
+    def store_fingerprint(self, fingerprint: DeviceFingerprint) -> None:
+        """Store fingerprint in Redis."""
+        if not self._redis:
+            return
+
+        try:
+            key = f"{self.KEY_PREFIX}:{fingerprint.fingerprint_id}:data"
+            data = {
+                'fingerprint_id': fingerprint.fingerprint_id,
+                'device_type': fingerprint.device_type.value,
+                'os': fingerprint.os,
+                'os_version': fingerprint.os_version,
+                'browser': fingerprint.browser,
+                'browser_version': fingerprint.browser_version,
+                'screen_resolution': fingerprint.screen_resolution,
+                'timezone': fingerprint.timezone,
+                'language': fingerprint.language,
+                'is_incognito': fingerprint.is_incognito,
+                'has_plugins': fingerprint.has_plugins,
+                'canvas_hash': fingerprint.canvas_hash,
+                'webgl_hash': fingerprint.webgl_hash,
+                'audio_hash': fingerprint.audio_hash,
+                'fonts_hash': fingerprint.fonts_hash,
+                'is_emulator': fingerprint.is_emulator,
+                'is_vm': fingerprint.is_vm,
+                'ip_address': fingerprint.ip_address,
+                'first_seen': fingerprint.first_seen.isoformat(),
+                'last_seen': fingerprint.last_seen.isoformat(),
+            }
+            self._redis.set(key, json.dumps(data), ex=self.TTL_DAYS * 24 * 60 * 60)
+        except Exception as e:
+            logger.warning(f"Failed to store fingerprint: {e}")
+
+    def get_fingerprint(self, fingerprint_id: str) -> Optional[DeviceFingerprint]:
+        """Retrieve fingerprint from Redis."""
+        if not self._redis:
+            return None
+
+        try:
+            key = f"{self.KEY_PREFIX}:{fingerprint_id}:data"
+            data = self._redis.get(key)
+            if not data:
+                return None
+
+            parsed = json.loads(data)
+            return DeviceFingerprint(
+                fingerprint_id=parsed['fingerprint_id'],
+                device_type=DeviceType(parsed['device_type']),
+                os=parsed['os'],
+                os_version=parsed['os_version'],
+                browser=parsed['browser'],
+                browser_version=parsed['browser_version'],
+                screen_resolution=parsed.get('screen_resolution'),
+                timezone=parsed.get('timezone'),
+                language=parsed['language'],
+                is_incognito=parsed['is_incognito'],
+                has_plugins=parsed['has_plugins'],
+                canvas_hash=parsed.get('canvas_hash'),
+                webgl_hash=parsed.get('webgl_hash'),
+                audio_hash=parsed.get('audio_hash'),
+                fonts_hash=parsed.get('fonts_hash'),
+                is_emulator=parsed['is_emulator'],
+                is_vm=parsed['is_vm'],
+                ip_address=parsed['ip_address'],
+                first_seen=datetime.fromisoformat(parsed['first_seen']),
+                last_seen=datetime.fromisoformat(parsed['last_seen']),
+            )
+        except Exception as e:
+            logger.warning(f"Failed to get fingerprint: {e}")
+            return None
+
+    def associate_identity(
+        self,
+        fingerprint_id: str,
+        identity_hash: str,
+        timestamp: Optional[datetime] = None,
+    ) -> None:
+        """Associate an identity with a device fingerprint."""
+        if timestamp is None:
+            timestamp = datetime.now()
+
+        if not self._redis:
+            return
+
+        try:
+            # Add identity to device's identity set
+            device_key = f"{self.KEY_PREFIX}:{fingerprint_id}:identities"
+            self._redis.sadd(device_key, identity_hash)
+            self._redis.expire(device_key, self.TTL_DAYS * 24 * 60 * 60)
+
+            # Add device to identity's device set
+            identity_key = f"identity:{identity_hash}:devices"
+            self._redis.sadd(identity_key, fingerprint_id)
+            self._redis.expire(identity_key, self.TTL_DAYS * 24 * 60 * 60)
+
+            # Record interaction timestamp
+            interaction_key = f"{self.KEY_PREFIX}:{fingerprint_id}:interactions:{identity_hash}"
+            self._redis.zadd(interaction_key, {timestamp.isoformat(): timestamp.timestamp()})
+            self._redis.expire(interaction_key, self.TTL_DAYS * 24 * 60 * 60)
+        except Exception as e:
+            logger.warning(f"Failed to associate identity: {e}")
+
+    def get_associated_identities(self, fingerprint_id: str) -> List[str]:
+        """Get all identities associated with a device."""
+        if not self._redis:
+            return []
+
+        try:
+            key = f"{self.KEY_PREFIX}:{fingerprint_id}:identities"
+            identities = self._redis.smembers(key)
+            return list(identities) if identities else []
+        except Exception as e:
+            logger.warning(f"Failed to get associated identities: {e}")
+            return []
+
+    def get_identity_devices(self, identity_hash: str) -> List[str]:
+        """Get all devices used by an identity."""
+        if not self._redis:
+            return []
+
+        try:
+            key = f"identity:{identity_hash}:devices"
+            devices = self._redis.smembers(key)
+            return list(devices) if devices else []
+        except Exception as e:
+            logger.warning(f"Failed to get identity devices: {e}")
+            return []
+
+    def update_last_seen(self, fingerprint_id: str) -> None:
+        """Update last seen timestamp for a device."""
+        if not self._redis:
+            return
+
+        try:
+            key = f"{self.KEY_PREFIX}:{fingerprint_id}:data"
+            data = self._redis.get(key)
+            if data:
+                parsed = json.loads(data)
+                parsed['last_seen'] = datetime.now().isoformat()
+                self._redis.set(key, json.dumps(parsed), ex=self.TTL_DAYS * 24 * 60 * 60)
+        except Exception as e:
+            logger.warning(f"Failed to update last seen: {e}")
